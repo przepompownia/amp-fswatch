@@ -19,7 +19,7 @@ jobs:
         strategy:
             matrix:
                 php-version:
-                    - '8.1'
+                    - '8.2'
 
         steps:
             -
@@ -52,7 +52,7 @@ jobs:
         strategy:
             matrix:
                 php-version:
-                    - '8.1'
+                    - '8.2'
 
         steps:
             -
@@ -85,8 +85,10 @@ jobs:
         strategy:
             matrix:
                 php-version:
-                    - '8.0'
-                    - '8.1'
+                    - '8.2'
+                    - '8.3'
+                    - '8.4'
+                    - '8.5'
 
         steps:
             -
@@ -109,11 +111,11 @@ jobs:
             -
                 name: "Install Watchman"
                 run: |
-                    wget https://github.com/facebook/watchman/releases/download/v2020.09.14.00/watchman-v2020.09.14.00-linux.zip
-                    unzip watchman-v2020.09.14.00-linux.zip
+                    wget https://github.com/facebook/watchman/releases/download/v2025.12.22.00/watchman-v2025.12.22.00-linux.zip
+                    unzip watchman-v2025.12.22.00-linux.zip
                     sudo mkdir -p /usr/local/{bin,lib} /usr/local/var/run/watchman
-                    sudo mv watchman-v2020.09.14.00-linux/bin/watchman /usr/local/bin/watchman
-                    sudo mv watchman-v2020.09.14.00-linux/lib/* /usr/local/lib/
+                    sudo mv watchman-v2025.12.22.00-linux/bin/watchman /usr/local/bin/watchman
+                    sudo mv watchman-v2025.12.22.00-linux/lib/* /usr/local/lib/
                     sudo chmod 755 /usr/local/bin/watchman
                     sudo chmod 2777 /usr/local/var/run/watchman
             -

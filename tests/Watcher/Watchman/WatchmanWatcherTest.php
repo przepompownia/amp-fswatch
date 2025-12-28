@@ -9,16 +9,14 @@ use Phpactor\AmpFsWatch\Watcher;
 use Phpactor\AmpFsWatch\WatcherConfig;
 use Phpactor\AmpFsWatch\Watcher\Watchman\WatchmanWatcher;
 use Phpactor\AmpFsWatcher\Tests\Watcher\WatcherTestCase;
+use Prophecy\Prophecy\ObjectProphecy;
 
 class WatchmanWatcherTest extends WatcherTestCase
 {
     use \Prophecy\PhpUnit\ProphecyTrait;
     private const PLAN_DELAY = 100;
 
-    /**
-     * @var ObjectProphecy|CommandDetector
-     */
-    private $commandDetector;
+    private ObjectProphecy|CommandDetector $commandDetector;
 
     public function testIsSupported(): Generator
     {

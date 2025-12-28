@@ -4,7 +4,7 @@ Amp FS Watch
 ![CI](https://github.com/phpactor/amp-fswatch/workflows/CI/badge.svg)
 
 This is an [Amp](https://amphp.org/) library for asynchronously monitor paths
-on your file system changes using various stategues.
+on your file system changes using various stategies.
 
 It's been created to trigger code indexing in
 [Phpactor](https://github.com/phpactor/phpactor).

@@ -16,10 +16,7 @@ class FallbackWatcherTest extends AsyncTestCase
 {
     use \Prophecy\PhpUnit\ProphecyTrait;
 
-    /**
-     * @var ObjectProphecy|LoggerInterface
-     */
-    private $logger;
+    private ObjectProphecy|LoggerInterface $logger;
 
     private ObjectProphecy $watcher1;
 
