@@ -2,20 +2,11 @@
 
 namespace Phpactor\AmpFsWatch;
 
-use Amp\Promise;
-
 interface Watcher
 {
-    /**
-     * @return Promise<WatcherProcess>
-     */
-    public function watch(): Promise;
+    public function watch(): WatcherProcess;
 
-    /**
-     * @return Promise<bool>
-     */
-    public function isSupported(): Promise;
-
+    public function isSupported(): bool;
 
     public function describe(): string;
 }

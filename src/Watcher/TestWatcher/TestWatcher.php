@@ -2,13 +2,13 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\TestWatcher;
 
-use Amp\Delayed;
-use Amp\Promise;
-use Amp\Success;
 use Exception;
+use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\ModifiedFileQueue;
 use Phpactor\AmpFsWatch\Watcher;
 use Phpactor\AmpFsWatch\WatcherProcess;
+
+use function Amp\delay;
 
 class TestWatcher implements Watcher, WatcherProcess
 {
@@ -25,40 +25,36 @@ class TestWatcher implements Watcher, WatcherProcess
         $this->error = $error;
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return new Success($this);
+        return $this;
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
-        return new Success(true);
+        return true;
     }
 
     public function stop(): void
     {
     }
 
-
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return \Amp\call(function () {
-            if ($this->delay) {
-                yield new Delayed($this->delay);
-            }
+        if ($this->delay) {
+            delay($this->delay / 1000);
+        }
 
-            if ($this->error) {
-                throw $this->error;
-            }
+        if ($this->error) {
+            throw $this->error;
+        }
 
-            while (null !== $file = $this->queue->dequeue()) {
-                return $file;
-            }
+        while (null !== $file = $this->queue->dequeue()) {
+            return $file;
+        }
 
-            return null;
-        });
+        return null;
     }
-
 
     public function describe(): string
     {

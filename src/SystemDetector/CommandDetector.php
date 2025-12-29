@@ -3,33 +3,22 @@
 namespace Phpactor\AmpFsWatch\SystemDetector;
 
 use Amp\Process\Process;
-use Amp\Promise;
 
 class CommandDetector
 {
-    /**
-     * @return Promise<bool>
-     */
-    public function commandExists(string $command): Promise
+    public function commandExists(string $command): bool
     {
         return $this->checkPosixCommand($command);
     }
 
-    /**
-     * @return Promise<bool>
-     */
-    private function checkPosixCommand(string $command): Promise
+    private function checkPosixCommand(string $command): bool
     {
-        return \Amp\call(function () use ($command) {
-            $process = new Process([
-                'command',
-                '-v',
-                $command
-            ]);
+        $process = Process::start([
+            'command',
+            '-v',
+            $command,
+        ]);
 
-            yield $process->start();
-
-            return 0 === yield $process->join();
-        });
+        return 0 === $process->join();
     }
 }

@@ -2,11 +2,10 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\FsWatch;
 
-use Amp\ByteStream\LineReader;
-use Amp\Delayed;
+use Amp\Pipeline\Pipeline;
 use Amp\Process\Process;
-use Amp\Process\StatusError;
-use Amp\Promise;
+use Amp\Process\ProcessException;
+use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\ModifiedFileQueue;
 use Phpactor\AmpFsWatch\SystemDetector\CommandDetector;
 use Phpactor\AmpFsWatch\ModifiedFileBuilder;
@@ -16,6 +15,10 @@ use Phpactor\AmpFsWatch\WatcherProcess;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
+
+use function Amp\ByteStream\splitLines;
+use function Amp\async;
+use function Amp\delay;
 
 class FsWatchWatcher implements Watcher, WatcherProcess
 {
@@ -46,35 +49,31 @@ class FsWatchWatcher implements Watcher, WatcherProcess
     }
 
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            $this->process = yield $this->startProcess();
-            $this->running = true;
-            $this->feedQueue($this->process);
-            return $this;
-        });
+        $this->process = $this->startProcess();
+        $this->running = true;
+        $this->feedQueue($this->process);
+        return $this;
     }
 
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return \Amp\call(function () {
-            while (false === $this->process->isRunning()) {
-                yield new Delayed(self::POLL_TIME);
+        while (false === $this->process->isRunning()) {
+            delay(self::POLL_TIME / 1000);
+        }
+
+        while ($this->running) {
+            $this->queue = $this->queue->compress();
+
+            if ($next = $this->queue->dequeue()) {
+                return $next;
             }
 
-            while ($this->running) {
-                $this->queue = $this->queue->compress();
+            delay(self::POLL_TIME / 1000);
+        }
 
-                if ($next = $this->queue->dequeue()) {
-                    return $next;
-                }
-
-                yield new Delayed(self::POLL_TIME);
-            }
-
-            return null;
-        });
+        return null;
     }
 
     public function stop(): void
@@ -87,11 +86,11 @@ class FsWatchWatcher implements Watcher, WatcherProcess
         $this->running = false;
         try {
             $this->process->signal(SIGTERM);
-        } catch (StatusError) {
+        } catch (ProcessException) {
         }
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
         return $this->commandDetector->commandExists(self::CMD);
     }
@@ -102,40 +101,36 @@ class FsWatchWatcher implements Watcher, WatcherProcess
         return 'fs-watch';
     }
 
-    /**
-     * @return Promise<Process>
-     */
-    private function startProcess(): Promise
+    private function startProcess(): Process
     {
-        return \Amp\call(function () {
-            $process = new Process(array_merge([
-                self::CMD,
-            ], $this->config->paths(), [
+        $process = Process::start(array_merge([
+            self::CMD,
+        ], $this->config->paths(), [
                 '-r',
                 '--event=Created',
                 '--event=Updated',
-                '--event=Removed'
+                '--event=Removed',
             ]));
 
-            $pid = yield $process->start();
-            $this->logger->debug(sprintf('Started "%s"', $process->getCommand()));
+        $this->logger->debug(sprintf('Started "%s"', $process->getCommand()));
 
-            if (!$process->isRunning()) {
-                throw new RuntimeException(sprintf(
-                    'Could not start process: %s',
-                    $process->getCommand()
-                ));
-            }
+        if (!$process->isRunning()) {
+            throw new RuntimeException(sprintf(
+                'Could not start process: %s',
+                $process->getCommand()
+            ));
+        }
 
-            return $process;
-        });
+        return $process;
     }
 
     private function feedQueue(Process $process): void
     {
-        $reader = new LineReader($process->getStdout());
-        \Amp\asyncCall(function () use ($reader) {
-            while (null !== $line = yield $reader->readLine()) {
+        $reader = Pipeline::fromIterable(splitLines($process->getStdout()))
+            ->getIterator();
+        async(function () use ($reader): void {
+            while (false !== $reader->continue()) {
+                $line = $reader->getValue();
                 $builder = ModifiedFileBuilder::fromPath($line);
                 if (file_exists($line) && !is_file($line)) {
                     $builder->asFolder();

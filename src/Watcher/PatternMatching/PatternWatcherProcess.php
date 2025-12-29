@@ -2,7 +2,7 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\PatternMatching;
 
-use Amp\Promise;
+use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\WatcherProcess;
 
 class PatternWatcherProcess implements WatcherProcess
@@ -39,24 +39,24 @@ class PatternWatcherProcess implements WatcherProcess
     }
 
 
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return \Amp\call(function () {
-            while (null !== $file = yield $this->process->wait()) {
-                foreach ($this->includePatterns as $pattern) {
-                    if (false === $this->matcher->matches($file->path(), $pattern)) {
-                        continue 2;
-                    }
+        while (null !== $file = $this->process->wait()) {
+            foreach ($this->includePatterns as $pattern) {
+                if (false === $this->matcher->matches($file->path(), $pattern)) {
+                    continue 2;
                 }
-
-                foreach ($this->excludePatterns as $pattern) {
-                    if (true === $this->matcher->matches($file->path(), $pattern)) {
-                        continue 2;
-                    }
-                }
-
-                return $file;
             }
-        });
+
+            foreach ($this->excludePatterns as $pattern) {
+                if (true === $this->matcher->matches($file->path(), $pattern)) {
+                    continue 2;
+                }
+            }
+
+            return $file;
+        }
+
+        return null;
     }
 }

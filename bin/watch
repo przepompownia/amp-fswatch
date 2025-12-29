@@ -1,33 +1,30 @@
 #!/usr/bin/env php
 <?php
 
-use Amp\Delayed;
-use Amp\Loop;
-use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\WatcherConfig;
 use Phpactor\AmpFsWatch\Watcher\Fallback\FallbackWatcher;
 use Phpactor\AmpFsWatch\Watcher\Find\FindWatcher;
 use Phpactor\AmpFsWatch\Watcher\FsWatch\FsWatchWatcher;
 use Phpactor\AmpFsWatch\Watcher\Inotify\InotifyWatcher;
-use Phpactor\AmpFsWatch\Watcher\Null\NullWatcher;
 use Phpactor\AmpFsWatch\Watcher\PatternMatching\PatternMatchingWatcher;
 use Phpactor\AmpFsWatch\Watcher\PhpPollWatcher\PhpPollWatcher;
 use Psr\Log\AbstractLogger;
+use Revolt\EventLoop;
 
 require __DIR__ . '/../vendor/autoload.php';
 
 echo "This is a demo application\n";
 
 if (!isset($argv[1])) {
-    echo "You must specify a path to watch";
+    echo 'You must specify a path to watch';
     exit(1);
 }
- 
+
 $path = $argv[1];
 $logger = new class extends AbstractLogger {
-    public function log($level, $message, array $context = [])
+    public function log($level, $message, array $context = []): void
     {
-        fwrite(STDERR, sprintf('[%s] %s', $level, $message)."\n");
+        fwrite(STDERR, sprintf('[%s] %s', $level, $message) . "\n");
     }
 };
 
@@ -40,18 +37,15 @@ $watcher = new PatternMatchingWatcher(new FallbackWatcher([
     new FsWatchWatcher($config, $logger),
 ], $logger), [ '/**/*.php' ], []);
 
-Loop::run(function () use ($watcher, $path) {
-    $process = yield $watcher->watch([$path]);
+$process = $watcher->watch();
 
-    while (null !== $file = yield $process->wait()) {
-        fwrite(STDOUT, sprintf('[%s] %s (%s)'."\n", date('Y-m-d H:i:s.u'), $file->path(), $file->type()));
-    }
+// Signals are not supported on Windows
+if (defined('SIGINT')) {
+    EventLoop::onSignal(SIGINT, function () use ($process): void {
+        $process->stop();
+    });
+}
 
-    // Signals are not supported on Windows
-    if(defined('SIGINT')) {
-        Loop::onSignal(SIGINT, function () use ($process) {
-            $process->stop();
-            Loop::stop();
-        });
-    }
-});
+while (null !== $file = $process->wait()) {
+    fwrite(STDOUT, sprintf('[%s] %s (%s)' . "\n", date('Y-m-d H:i:s.u'), $file->path(), $file->type()));
+}

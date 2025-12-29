@@ -2,8 +2,8 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\BufferedWatcher;
 
-use Amp\Promise;
 use Phpactor\AmpFsWatch\Watcher;
+use Phpactor\AmpFsWatch\WatcherProcess;
 
 class BufferedWatcher implements Watcher
 {
@@ -17,15 +17,13 @@ class BufferedWatcher implements Watcher
         $this->interval = $interval;
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            return new BufferedWatcherProcess(yield $this->innerWatcher->watch(), $this->interval);
-        });
+        return new BufferedWatcherProcess($this->innerWatcher->watch(), $this->interval);
     }
 
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
         return $this->innerWatcher->isSupported();
     }

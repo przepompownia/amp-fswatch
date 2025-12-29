@@ -2,11 +2,11 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\BufferedWatcher;
 
-use Amp\Delayed;
-use Amp\Promise;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\WatcherProcess;
 use Throwable;
+use function Amp\async;
+use function Amp\delay;
 
 class BufferedWatcherProcess implements WatcherProcess
 {
@@ -28,9 +28,9 @@ class BufferedWatcherProcess implements WatcherProcess
         $this->innerProcess = $innerProcess;
         $this->interval = $interval;
 
-        \Amp\asyncCall(function () {
+        async(function (): void {
             try {
-                while (null !== $modifiedFile = yield $this->innerProcess->wait()) {
+                while (null !== $modifiedFile = $this->innerProcess->wait()) {
                     assert($modifiedFile instanceof ModifiedFile);
                     $this->buffer[$modifiedFile->path()] = $modifiedFile;
                 }
@@ -47,23 +47,20 @@ class BufferedWatcherProcess implements WatcherProcess
         $this->innerProcess->stop();
     }
 
-
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return \Amp\call(function () {
-            while ($this->running || !empty($this->buffer || null !== $this->error)) {
-                if ($this->error) {
-                    $error = $this->error;
-                    $this->error = null;
-                    throw $error;
-                }
-                if ($this->buffer) {
-                    return array_shift($this->buffer);
-                }
-                yield new Delayed($this->interval);
+        while ($this->running || !empty($this->buffer || null !== $this->error)) {
+            if ($this->error) {
+                $error = $this->error;
+                $this->error = null;
+                throw $error;
             }
+            if ($this->buffer) {
+                return array_shift($this->buffer);
+            }
+            delay($this->interval / 1000);
+        }
 
-            return null;
-        });
+        return null;
     }
 }

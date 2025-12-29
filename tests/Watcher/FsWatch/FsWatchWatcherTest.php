@@ -2,8 +2,6 @@
 
 namespace Phpactor\AmpFsWatcher\Tests\Watcher\FsWatch;
 
-use Amp\Success;
-use Generator;
 use Phpactor\AmpFsWatch\SystemDetector\CommandDetector;
 use Phpactor\AmpFsWatch\Watcher;
 use Phpactor\AmpFsWatch\WatcherConfig;
@@ -24,19 +22,19 @@ class FsWatchWatcherTest extends WatcherTestCase
         $this->commandDetector->commandExists('fswatch')->willReturn(true);
     }
 
-    public function testIsSupported(): Generator
+    public function testIsSupported(): void
     {
         $watcher = $this->createWatcher(new WatcherConfig([]));
-        $this->commandDetector->commandExists('fswatch')->willReturn(new Success(true));
+        $this->commandDetector->commandExists('fswatch')->willReturn(true);
 
-        self::assertTrue(yield $watcher->isSupported());
+        self::assertTrue($watcher->isSupported());
     }
 
-    public function testNotSupportedIfCommandNotFound(): Generator
+    public function testNotSupportedIfCommandNotFound(): void
     {
         $watcher = $this->createWatcher(new WatcherConfig([]));
-        $this->commandDetector->commandExists('fswatch')->willReturn(new Success(false));
-        self::assertFalse(yield $watcher->isSupported());
+        $this->commandDetector->commandExists('fswatch')->willReturn(false);
+        self::assertFalse($watcher->isSupported());
     }
 
     protected function createWatcher(WatcherConfig $config): Watcher

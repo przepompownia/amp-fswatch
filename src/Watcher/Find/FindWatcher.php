@@ -2,11 +2,9 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\Find;
 
-use Amp\ByteStream\LineReader;
-use Amp\Delayed;
+use Amp\ByteStream\ReadableResourceStream;
+use Amp\Pipeline\Pipeline;
 use Amp\Process\Process;
-use Amp\Promise;
-use Amp\Process\ProcessInputStream;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\ModifiedFileQueue;
 use Phpactor\AmpFsWatch\SystemDetector\CommandDetector;
@@ -16,6 +14,9 @@ use Phpactor\AmpFsWatch\WatcherProcess;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
+
+use function Amp\ByteStream\splitLines;
+use function Amp\async;
 use function Amp\delay;
 
 class FindWatcher implements Watcher, WatcherProcess
@@ -44,49 +45,45 @@ class FindWatcher implements Watcher, WatcherProcess
         $this->lastUpdateFile = $config->lastUpdateReferenceFile() ?: $this->createTempFile();
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            $this->logger->info(sprintf(
-                'Polling at interval of "%s" milliseconds for changes paths "%s"',
-                $this->config->pollInterval(),
-                implode('", "', $this->config->paths())
-            ));
+        $this->logger->info(sprintf(
+            'Polling at interval of "%s" milliseconds for changes paths "%s"',
+            $this->config->pollInterval(),
+            implode('", "', $this->config->paths())
+        ));
 
-            $this->updateDateReference();
-            $this->running = true;
+        $this->updateDateReference();
+        $this->running = true;
 
-            yield delay(10);
+        async(function (): void {
+            delay(.01);
 
-            \Amp\asyncCall(function () {
-                while ($this->running) {
-                    $searches = [];
-                    foreach ($this->config->paths() as $path) {
-                        $searches[] = $this->search($path);
-                    }
-                    yield \Amp\Promise\all($searches);
-                    $this->updateDateReference();
-                    yield new Delayed($this->config->pollInterval());
-                }
-            });
-
-            return $this;
-        });
-    }
-
-    public function wait(): Promise
-    {
-        return \Amp\call(function () {
             while ($this->running) {
-                $this->queue = $this->queue->compress();
-
-                if ($next = $this->queue->dequeue()) {
-                    return $next;
+                foreach ($this->config->paths() as $path) {
+                    $this->search($path);
                 }
-
-                yield new Delayed($this->config->pollInterval() / 2);
+                $this->updateDateReference();
+                delay($this->config->pollInterval() / 1000);
             }
         });
+
+        return $this;
+    }
+
+    public function wait(): ?ModifiedFile
+    {
+        while ($this->running) {
+            $this->queue = $this->queue->compress();
+
+            if ($next = $this->queue->dequeue()) {
+                return $next;
+            }
+
+            delay($this->config->pollInterval() / 2000);
+        }
+
+        return null;
     }
 
     public function stop(): void
@@ -94,7 +91,7 @@ class FindWatcher implements Watcher, WatcherProcess
         $this->running = false;
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
         return $this->commandDetector->commandExists('find');
     }
@@ -105,81 +102,69 @@ class FindWatcher implements Watcher, WatcherProcess
         return 'find (BSD/GNU)';
     }
 
-    /**
-     * @return Promise<void>
-     */
-    private function search(string $path): Promise
+    private function search(string $path): void
     {
-        return \Amp\call(function () use ($path) {
-            $start = microtime(true);
-            $process = yield $this->startProcess($path);
+        $start = microtime(true);
+        $process = $this->startProcess($path);
 
-            $this->feedQueue($process->getStdout());
+        $this->feedQueue($process->getStdout());
 
-            $exitCode = yield $process->join();
-            $stop = microtime(true);
+        $exitCode = $process->join();
+        $stop = microtime(true);
 
-            $this->logger->debug(sprintf(
-                'pid:%s Find process "%s" done in %s seconds',
-                getmypid(),
-                $process->getCommand(),
-                number_format($stop - $start, 2)
-            ));
+        $this->logger->debug(sprintf(
+            'pid:%s Find process "%s" done in %s seconds',
+            getmypid(),
+            $process->getCommand(),
+            number_format($stop - $start, 2)
+        ));
 
-            if ($exitCode === 0) {
-                return;
-            }
+        if ($exitCode === 0) {
+            return;
+        }
 
-            $stderr = yield $process->getStderr()->read();
-            $this->logger->error(sprintf(
-                'Process "%s" exited with error code %s: %s',
-                $process->getCommand(),
-                $exitCode,
-                $stderr
-            ));
-        });
+        $stderr = $process->getStderr()->read();
+        $this->logger->error(sprintf(
+            'Process "%s" exited with error code %s: %s',
+            $process->getCommand(),
+            $exitCode,
+            $stderr
+        ));
     }
 
-    private function feedQueue(ProcessInputStream $stream): void
+    private function feedQueue(ReadableResourceStream $stream): void
     {
-        \Amp\asyncCall(function () use ($stream) {
-            $reader = new LineReader($stream);
-            while (null !== $line = yield $reader->readLine()) {
-                $this->logger->debug('find found: ' . $line);
-                $this->queue->enqueue(new ModifiedFile($line, is_file($line) ? ModifiedFile::TYPE_FILE : ModifiedFile::TYPE_FOLDER));
-            }
-        });
+        $reader = Pipeline::fromIterable(splitLines($stream))->getIterator();
+
+        while (false !== $reader->continue()) {
+            $line = $reader->getValue();
+            $this->logger->debug('find found: ' . $line);
+            $this->queue->enqueue(new ModifiedFile($line, is_file($line) ? ModifiedFile::TYPE_FILE : ModifiedFile::TYPE_FOLDER));
+        }
     }
 
-    /**
-     * @return Promise<Process>
-     */
-    private function startProcess(string $path): Promise
+    private function startProcess(string $path): Process
     {
-        return \Amp\call(function () use ($path) {
-            // use ctime (inode status change time) rather than modification
-            // time as vendor libraries (for example) preserve the modification
-            // times.
-            $process = new Process([
-                'find',
-                $path,
-                '-mindepth',
-                '1',
-                '-newercc',
-                $this->lastUpdateFile
-            ]);
+        // use ctime (inode status change time) rather than modification
+        // time as vendor libraries (for example) preserve the modification
+        // times.
+        $process = Process::start([
+            'find',
+            $path,
+            '-mindepth',
+            '1',
+            '-newercc',
+            $this->lastUpdateFile,
+        ]);
 
-            $pid = yield $process->start();
+        if (!$process->isRunning()) {
+            throw new RuntimeException(sprintf(
+                'Could not start process: %s',
+                $process->getCommand()
+            ));
+        }
 
-            if (!$process->isRunning()) {
-                throw new RuntimeException(sprintf(
-                    'Could not start process: %s',
-                    $process->getCommand()
-                ));
-            }
-
-            return $process;
-        });
+        return $process;
     }
 
     private function updateDateReference(): void

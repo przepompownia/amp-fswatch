@@ -2,9 +2,6 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\PhpPollWatcher;
 
-use Amp\Delayed;
-use Amp\Promise;
-use Amp\Success;
 use DateTimeImmutable;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\ModifiedFileQueue;
@@ -14,6 +11,9 @@ use Phpactor\AmpFsWatch\WatcherProcess;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Symfony\Component\Filesystem\Path;
+
+use function Amp\async;
+use function Amp\delay;
 
 class PhpPollWatcher implements Watcher, WatcherProcess
 {
@@ -36,59 +36,55 @@ class PhpPollWatcher implements Watcher, WatcherProcess
         $this->config = $config;
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            $this->logger->info(sprintf(
-                'Polling at interval of "%s" milliseconds for changes paths "%s"',
-                $this->config->pollInterval(),
-                implode('", "', $this->config->paths())
-            ));
+        $this->logger->info(sprintf(
+            'Polling at interval of "%s" milliseconds for changes paths "%s"',
+            $this->config->pollInterval(),
+            implode('", "', $this->config->paths())
+        ));
 
-            $this->updateDateReference();
-            $this->running = true;
+        $this->updateDateReference();
+        $this->running = true;
 
-            \Amp\asyncCall(function () {
-                while ($this->running) {
-                    $start = microtime(true);
-                    $searches = [];
-
-                    foreach ($this->config->paths() as $path) {
-                        $searches[] = $this->search($path);
-                    }
-
-                    yield \Amp\Promise\all($searches);
-
-                    $this->logger->debug(sprintf(
-                        'pid: %s PHP watcher scanned paths "%s" in %s seconds',
-                        getmypid(),
-                        implode('", "', $this->config->paths()),
-                        number_format(microtime(true) - $start, 2)
-                    ));
-
-                    $this->updateDateReference();
-
-                    yield new Delayed($this->config->pollInterval());
-                }
-            });
-
-            return $this;
-        });
-    }
-
-    public function wait(): Promise
-    {
-        return \Amp\call(function () {
+        async(function (): void {
             while ($this->running) {
-                $this->queue = $this->queue->compress();
+                $start = microtime(true);
+                $searches = [];
 
-                if ($next = $this->queue->dequeue()) {
-                    return $next;
+                foreach ($this->config->paths() as $path) {
+                    $this->search($path);
                 }
 
-                yield new Delayed($this->config->pollInterval() / 2);
+                $this->logger->debug(sprintf(
+                    'pid: %s PHP watcher scanned paths "%s" in %s seconds',
+                    getmypid(),
+                    implode('", "', $this->config->paths()),
+                    number_format(microtime(true) - $start, 2)
+                ));
+
+                $this->updateDateReference();
+
+                delay($this->config->pollInterval() / 1000);
             }
         });
+
+        return $this;
+    }
+
+    public function wait(): ?ModifiedFile
+    {
+        while ($this->running) {
+            $this->queue = $this->queue->compress();
+
+            if ($next = $this->queue->dequeue()) {
+                return $next;
+            }
+
+            delay($this->config->pollInterval() / 2000);
+        }
+
+        return null;
     }
 
     public function stop(): void
@@ -96,9 +92,9 @@ class PhpPollWatcher implements Watcher, WatcherProcess
         $this->running = false;
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
-        return new Success(true);
+        return true;
     }
 
 
@@ -107,36 +103,31 @@ class PhpPollWatcher implements Watcher, WatcherProcess
         return 'php-poll';
     }
 
-    /**
-     * @return Promise<void>
-     */
-    private function search(string $path): Promise
+    private function search(string $path): void
     {
-        return \Amp\call(function () use ($path) {
-            $files = scandir($path);
-            foreach ((array)$files as $file) {
-                if (false === $file || $file === '.' || $file === '..') {
-                    continue;
-                }
-                $filePath = Path::join($path, $file);
-                clearstatcache();
-                $mtime = filectime($filePath);
-                $isDir = is_dir($filePath);
-
-
-                // we are only accurate to seconds, so accept also
-                // if mtime is the same as current timestamp
-                if ($mtime >= $this->lastUpdate->format('U')) {
-                    $this->queue->enqueue(
-                        new ModifiedFile($filePath, $isDir ? ModifiedFile::TYPE_FOLDER : ModifiedFile::TYPE_FILE)
-                    );
-                }
-
-                if ($isDir) {
-                    yield $this->search($filePath);
-                }
+        $files = scandir($path);
+        foreach ((array)$files as $file) {
+            if (false === $file || $file === '.' || $file === '..') {
+                continue;
             }
-        });
+            $filePath = Path::join($path, $file);
+            clearstatcache();
+            $mtime = filectime($filePath);
+            $isDir = is_dir($filePath);
+
+
+            // we are only accurate to seconds, so accept also
+            // if mtime is the same as current timestamp
+            if ($mtime >= $this->lastUpdate->format('U')) {
+                $this->queue->enqueue(
+                    new ModifiedFile($filePath, $isDir ? ModifiedFile::TYPE_FOLDER : ModifiedFile::TYPE_FILE)
+                );
+            }
+
+            if ($isDir) {
+                $this->search($filePath);
+            }
+        }
     }
 
 

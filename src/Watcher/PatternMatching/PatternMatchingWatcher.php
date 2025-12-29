@@ -2,8 +2,8 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\PatternMatching;
 
-use Amp\Promise;
 use Phpactor\AmpFsWatch\Watcher;
+use Phpactor\AmpFsWatch\WatcherProcess;
 
 class PatternMatchingWatcher implements Watcher
 {
@@ -30,15 +30,13 @@ class PatternMatchingWatcher implements Watcher
         $this->excludePatterns = $excludePatterns;
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            $process = yield $this->innerWatcher->watch();
-            return new PatternWatcherProcess($process, $this->includePatterns, $this->excludePatterns);
-        });
+        $process = $this->innerWatcher->watch();
+        return new PatternWatcherProcess($process, $this->includePatterns, $this->excludePatterns);
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
         return $this->innerWatcher->isSupported();
     }

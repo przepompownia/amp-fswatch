@@ -2,36 +2,29 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\Null;
 
-use Amp\Promise;
-use Amp\Success;
+use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\WatcherProcess;
-
 use Phpactor\AmpFsWatch\Watcher;
 
 class NullWatcher implements Watcher, WatcherProcess
 {
-
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            return $this;
-        });
+        return $this;
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
-        return new Success(true);
+        return true;
     }
 
     public function stop(): void
     {
     }
 
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return \Amp\call(function () {
-            return null;
-        });
+        return null;
     }
 
 

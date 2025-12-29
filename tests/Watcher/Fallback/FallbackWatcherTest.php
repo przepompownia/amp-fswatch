@@ -3,8 +3,6 @@
 namespace Phpactor\AmpFsWatcher\Tests\Watcher\Fallback;
 
 use Amp\PHPUnit\AsyncTestCase;
-use Amp\Success;
-use Generator;
 use Phpactor\AmpFsWatch\Watcher;
 use Phpactor\AmpFsWatch\Watcher\Fallback\FallbackWatcher;
 use Phpactor\AmpFsWatch\Watcher\Null\NullWatcher;
@@ -16,10 +14,7 @@ class FallbackWatcherTest extends AsyncTestCase
 {
     use \Prophecy\PhpUnit\ProphecyTrait;
 
-    /**
-     * @var ObjectProphecy|LoggerInterface
-     */
-    private $logger;
+    private ObjectProphecy|LoggerInterface $logger;
 
     private ObjectProphecy $watcher1;
 
@@ -44,9 +39,9 @@ class FallbackWatcherTest extends AsyncTestCase
         self::assertEquals('unknown (pending invocation)', $watcher->describe());
     }
 
-    public function testUsesFirstSupportedWatcher()
+    public function testUsesFirstSupportedWatcher(): void
     {
-        $this->watcher1->isSupported()->willReturn(new Success(false));
+        $this->watcher1->isSupported()->willReturn(false);
 
         $callback = function (): void {
         };
@@ -56,24 +51,24 @@ class FallbackWatcherTest extends AsyncTestCase
 
         $watcher = $this->createWatcher([
             $this->watcher1->reveal(),
-            $nullWatcher
+            $nullWatcher,
         ]);
-        $process = yield $watcher->watch($paths, $callback);
+        $process = $watcher->watch($paths, $callback);
 
         self::assertSame($nullWatcher, $process);
         self::assertEquals('null', $watcher->describe());
     }
 
-    public function testReturnsNullWatcherAndLogsWarningIfNoSupportedWatchers()
+    public function testReturnsNullWatcherAndLogsWarningIfNoSupportedWatchers(): void
     {
-        $this->watcher1->isSupported()->willReturn(new Success(false));
-        $this->watcher2->isSupported()->willReturn(new Success(false));
+        $this->watcher1->isSupported()->willReturn(false);
+        $this->watcher2->isSupported()->willReturn(false);
 
         $callback = function (): void {
         };
         $paths = ['path1'];
 
-        $process = yield $this->createWatcher([
+        $process = $this->createWatcher([
             $this->watcher1->reveal(),
             $this->watcher2->reveal(),
         ])->watch($paths, $callback);
@@ -83,10 +78,10 @@ class FallbackWatcherTest extends AsyncTestCase
         self::assertInstanceOf(NullWatcher::class, $process);
     }
 
-    public function testIsAlwaysSupported(): Generator
+    public function testIsAlwaysSupported(): void
     {
         $watcher = $this->createWatcher([]);
-        self::assertTrue(yield $watcher->isSupported());
+        self::assertTrue($watcher->isSupported());
     }
 
     private function createWatcher(array $watchers): Watcher

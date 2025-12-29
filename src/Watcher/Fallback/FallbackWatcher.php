@@ -2,13 +2,11 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\Fallback;
 
-use Amp\Promise;
-use Amp\Success;
 use Phpactor\AmpFsWatch\Watcher;
+use Phpactor\AmpFsWatch\WatcherProcess;
 use Phpactor\AmpFsWatch\Watcher\Null\NullWatcher;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use function Amp\call;
 
 class FallbackWatcher implements Watcher
 {
@@ -32,19 +30,17 @@ class FallbackWatcher implements Watcher
         }
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return call(function () {
-            $watcher = (yield $this->resolveWatcher());
-            $this->lastWatcherName = $watcher->describe();
+        $watcher = $this->resolveWatcher();
+        $this->lastWatcherName = $watcher->describe();
 
-            return $watcher->watch();
-        });
+        return $watcher->watch();
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
-        return new Success(true);
+        return true;
     }
 
 
@@ -62,28 +58,23 @@ class FallbackWatcher implements Watcher
         $this->watchers[] = $watcher;
     }
 
-    /**
-     * @return Promise<bool>
-     */
-    private function resolveWatcher(): Promise
+    private function resolveWatcher(): Watcher
     {
-        return call(function () {
-            $names = [];
-            foreach ($this->watchers as $watcher) {
-                if (!yield $watcher->isSupported()) {
-                    $names[] = yield new Success($watcher->describe());
-                    continue;
-                }
-
-                return $watcher;
+        $names = [];
+        foreach ($this->watchers as $watcher) {
+            if (!$watcher->isSupported()) {
+                $names[] = $watcher->describe();
+                continue;
             }
 
-            $this->logger->warning(sprintf(
-                'No supported watchers, tried "%s".',
-                implode('", "', $names)
-            ));
+            return $watcher;
+        }
 
-            return new NullWatcher();
-        });
+        $this->logger->warning(sprintf(
+            'No supported watchers, tried "%s".',
+            implode('", "', $names)
+        ));
+
+        return new NullWatcher();
     }
 }

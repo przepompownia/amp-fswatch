@@ -2,9 +2,6 @@
 
 namespace Phpactor\AmpFsWatcher\Tests\Watcher;
 
-use Amp\Delayed;
-use Amp\Promise;
-use Generator;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\Watcher;
 use Phpactor\AmpFsWatch\WatcherConfig;
@@ -13,6 +10,8 @@ use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
 use Phpactor\AmpFsWatcher\Tests\IntegrationTestCase;
 
+use function Amp\delay;
+
 abstract class WatcherTestCase extends IntegrationTestCase
 {
     const DELAY_MILLI = 20;
@@ -20,128 +19,128 @@ abstract class WatcherTestCase extends IntegrationTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->setTimeout(5000);
+        $this->setTimeout(5);
         $this->workspace()->reset();
     }
 
-    public function testSingleFileChange(): Generator
+    public function testSingleFileChange(): void
     {
-        $process = yield $this->startProcess();
-        yield $this->delay();
+        $process = $this->startProcess();
+        $this->delay();
         $this->workspace()->put('foobar', '');
-        yield $this->delay();
+        $this->delay();
 
         self::assertEquals(
             new ModifiedFile(
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            yield $process->wait()
+            $process->wait()
         );
 
         $process->stop();
     }
 
-    public function testSingleFileChangeWithModificationTimeInPast(): Generator
+    public function testSingleFileChangeWithModificationTimeInPast(): void
     {
-        $process = yield $this->startProcess();
-        yield $this->delay();
+        $process = $this->startProcess();
+        $this->delay();
         touch($this->workspace()->path('foobar'), time() - 3600);
-        yield $this->delay();
+        $this->delay();
 
         self::assertEquals(
             new ModifiedFile(
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            yield $process->wait()
+            $process->wait()
         );
 
         $process->stop();
     }
 
-    public function testMultipleSameFile(): Generator
+    public function testMultipleSameFile(): void
     {
-        $process = yield $this->startProcess();
+        $process = $this->startProcess();
 
-        yield $this->delay();
+        $this->delay();
         $this->workspace()->put('foobar', '');
         $this->workspace()->put('foobar', 'foobar');
-        yield $this->delay();
+        $this->delay();
 
         self::assertEquals(
             new ModifiedFile(
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            yield $process->wait()
+            $process->wait()
         );
 
         $process->stop();
     }
 
-    public function testDirectory(): Generator
+    public function testDirectory(): void
     {
-        $process = yield $this->startProcess();
+        $process = $this->startProcess();
 
-        yield $this->delay();
+        $this->delay();
         $this->workspace()->mkdir('foobar');
-        yield $this->delay();
+        $this->delay();
 
         self::assertEquals(
             new ModifiedFile(
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FOLDER
             ),
-            yield $process->wait()
+            $process->wait()
         );
 
         $process->stop();
     }
 
-    public function testRemoval(): Generator
+    public function testRemoval(): void
     {
         $this->workspace()->put('foobar', '');
 
-        $process = yield $this->startProcess();
+        $process = $this->startProcess();
 
-        yield $this->delay();
+        $this->delay();
 
         unlink($this->workspace()->path('foobar'));
 
-        yield $this->delay();
+        $this->delay();
 
         self::assertEquals(
             new ModifiedFile(
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            yield $process->wait()
+            $process->wait()
         );
 
         $process->stop();
     }
 
-    public function testMultiplePaths(): Generator
+    public function testMultiplePaths(): void
     {
         $this->workspace()->mkdir('foobar');
         $this->workspace()->mkdir('barfoo');
 
-        $process = yield $this->startProcess([
+        $process = $this->startProcess([
             $this->workspace()->path('barfoo'),
             $this->workspace()->path('foobar'),
         ]);
 
-        yield $this->delay();
+        $this->delay();
 
         $this->workspace()->put('barfoo/foobar', '');
         $this->workspace()->put('foobar/barfoo', '');
 
-        yield $this->delay();
+        $this->delay();
 
         $files = [];
         for ($i = 0; $i < 2; $i++) {
-            $file = yield $process->wait();
+            $file = $process->wait();
             $files[$file->path()] = $file;
         }
 
@@ -156,13 +155,13 @@ abstract class WatcherTestCase extends IntegrationTestCase
         self::assertIsString($this->createWatcher(new WatcherConfig([]))->describe());
     }
 
-    abstract public function testIsSupported(): Generator;
+    abstract public function testIsSupported(): void;
 
     abstract protected function createWatcher(WatcherConfig $config): Watcher;
 
-    protected function delay(): Delayed
+    protected function delay(): void
     {
-        return new Delayed(self::DELAY_MILLI);
+        delay(self::DELAY_MILLI / 1000);
     }
 
     protected function createLogger(): LoggerInterface
@@ -173,17 +172,15 @@ abstract class WatcherTestCase extends IntegrationTestCase
                 if ($level === 'debug') {
                     return;
                 }
-                fwrite(STDERR, sprintf('[%s] [%s] %s', microtime(), $level, $message)."\n");
+                fwrite(STDERR, sprintf('[%s] [%s] %s', microtime(), $level, $message) . "\n");
             }
         };
     }
 
     /**
      * @param array<string> $paths
-     *
-     * @return Promise<WatcherProcess>
      */
-    protected function startProcess(?array $paths = []): Promise
+    protected function startProcess(?array $paths = []): WatcherProcess
     {
         $paths = $paths ?: [ $this->workspace()->path() ];
         $watcher = $this->createWatcher(new WatcherConfig($paths));

@@ -3,7 +3,6 @@
 namespace Phpactor\AmpFsWatcher\Tests\Watcher\PatternMatching;
 
 use Amp\PHPUnit\AsyncTestCase;
-use Generator;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\ModifiedFileQueue;
 use Phpactor\AmpFsWatch\Watcher;
@@ -12,17 +11,16 @@ use Phpactor\AmpFsWatch\Watcher\TestWatcher\TestWatcher;
 
 class PatternMatchingWatcherTest extends AsyncTestCase
 {
-
-    public function testIncludesFiles()
+    public function testIncludesFiles(): void
     {
-        $process = yield $this->createWatcher(['/**/*.php'], [], [
+        $process = $this->createWatcher(['/**/*.php'], [], [
             $this->createFile('/Foobar.php'),
             $this->createFile('/Foobar.php~'),
             $this->createFile('/timestamp'),
         ])->watch();
 
         $files = [];
-        while (null !== $file = yield $process->wait()) {
+        while (null !== $file = $process->wait()) {
             $files[] = $file;
         }
 
@@ -30,25 +28,25 @@ class PatternMatchingWatcherTest extends AsyncTestCase
         self::assertEquals($this->createFile('/Foobar.php'), $files[0]);
     }
 
-    public function testExcludesFiles()
+    public function testExcludesFiles(): void
     {
-        $process = yield $this->createWatcher(['/**/*.php'], ['/**/Foobar.php'], [
+        $process = $this->createWatcher(['/**/*.php'], ['/**/Foobar.php'], [
             $this->createFile('/Foobar.php'),
             $this->createFile('/Barfoo.php'),
             $this->createFile('/timestamp'),
         ])->watch();
 
         $files = [];
-        while (null !== $file = yield $process->wait()) {
+        while (null !== $file = $process->wait()) {
             $files[] = $file;
         }
 
         self::assertCount(1, $files);
     }
 
-    public function testIsSupported(): Generator
+    public function testIsSupported(): void
     {
-        self::assertTrue(yield $this->createWatcher([], [], [])->isSupported());
+        self::assertTrue($this->createWatcher([], [], [])->isSupported());
     }
     protected function createWatcher(array $includePatterns, array $excludePatterns, array $modifiedFiles): Watcher
     {

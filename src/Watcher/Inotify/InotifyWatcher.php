@@ -2,11 +2,10 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\Inotify;
 
-use Amp\ByteStream\LineReader;
+use Amp\Pipeline\ConcurrentIterator;
+use Amp\Pipeline\Pipeline;
 use Amp\Process\Process;
-use Amp\Process\StatusError;
-use Amp\Promise;
-use Amp\Success;
+use Amp\Process\ProcessException;
 use Phpactor\AmpFsWatch\Exception\WatcherDied;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\SystemDetector\CommandDetector;
@@ -19,7 +18,9 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
 use Symfony\Component\Filesystem\Path;
+
 use function Amp\ByteStream\buffer;
+use function Amp\ByteStream\splitLines;
 
 class InotifyWatcher implements Watcher, WatcherProcess
 {
@@ -35,7 +36,10 @@ class InotifyWatcher implements Watcher, WatcherProcess
 
     private WatcherConfig $config;
 
-    private LineReader $lineReader;
+    /**
+     * @var ConcurrentIterator<string>
+     */
+    private ConcurrentIterator $lineReader;
 
     /**
      * @var array<ModifiedFile>
@@ -54,58 +58,56 @@ class InotifyWatcher implements Watcher, WatcherProcess
         $this->config = $config;
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return \Amp\call(function () {
-            $this->process = yield $this->startProcess();
-            $this->lineReader = new LineReader($this->process->getStdout());
+        $this->process = $this->startProcess();
+        $this->lineReader = Pipeline::fromIterable(splitLines($this->process->getStdout()))->getIterator();
 
-            return $this;
-        });
+        return $this;
     }
 
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return \Amp\call(function () {
-            while (null !== $file = array_shift($this->directoryBuffer)) {
-                return $file;
+        while (null !== $file = array_shift($this->directoryBuffer)) {
+            return $file;
+        }
+
+        if (false === $this->lineReader->continue()) {
+            $exitCode = $this->process->join();
+
+            // probably ran out of watchers, throw an error which can be
+            // handled downstream.
+            if ($exitCode === 1) {
+                throw new WatcherDied(sprintf(
+                    'Inotify exited with status code "%s": %s',
+                    $exitCode,
+                    buffer($this->process->getStderr())
+                ));
             }
 
-            if (null === $line = yield $this->lineReader->readLine()) {
-                $exitCode = yield $this->process->join();
+            return null;
+        }
 
-                // probably ran out of watchers, throw an error which can be
-                // handled downstream.
-                if ($exitCode === 1) {
-                    throw new WatcherDied(sprintf(
-                        'Inotify exited with status code "%s": %s',
-                        $exitCode,
-                        yield buffer($this->process->getStderr())
-                    ));
-                }
+        $line = $this->lineReader->getValue();
 
-                return null;
-            }
+        $event = InotifyEvent::createFromCsv($line);
 
-            $event = InotifyEvent::createFromCsv($line);
+        $builder = ModifiedFileBuilder::fromPathSegments(
+            $event->watchedFileName(),
+            $event->eventFilename()
+        );
 
-            $builder = ModifiedFileBuilder::fromPathSegments(
-                $event->watchedFileName(),
-                $event->eventFilename()
-            );
+        if ($event->hasEventName('ISDIR')) {
+            $builder = $builder->asFolder();
+        }
 
-            if ($event->hasEventName('ISDIR')) {
-                $builder = $builder->asFolder();
-            }
+        $modifiedFile = $builder->build();
 
-            $modifiedFile = $builder->build();
+        if ($event->hasEventName('MOVED_TO') && $modifiedFile->type() === ModifiedFile::TYPE_FOLDER) {
+            $this->enqueueDirectory($modifiedFile->path());
+        }
 
-            if ($event->hasEventName('MOVED_TO') && $modifiedFile->type() === ModifiedFile::TYPE_FOLDER) {
-                yield $this->enqueueDirectory($modifiedFile->path());
-            }
-
-            return $modifiedFile;
-        });
+        return $modifiedFile;
     }
 
     public function stop(): void
@@ -118,14 +120,14 @@ class InotifyWatcher implements Watcher, WatcherProcess
 
         try {
             $this->process->signal(SIGTERM);
-        } catch (StatusError) {
+        } catch (ProcessException) {
         }
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
         if (!$this->osDetector->isLinux()) {
-            return new Success(false);
+            return false;
         }
 
         return $this->commandDetector->commandExists(self::INOTIFY_CMD);
@@ -137,60 +139,49 @@ class InotifyWatcher implements Watcher, WatcherProcess
         return 'inotify';
     }
 
-    /**
-     * @return Promise<Process>
-     */
-    private function startProcess(): Promise
+    private function startProcess(): Process
     {
-        return \Amp\call(function () {
-            $process = new Process(array_merge([
-                self::INOTIFY_CMD,
-                '-r',
-                '-emodify,create,delete,move',
-                '--monitor',
-                '--csv',
-            ], $this->config->paths()));
+        $process = Process::start(array_merge([
+            self::INOTIFY_CMD,
+            '-r',
+            '-emodify,create,delete,move',
+            '--monitor',
+            '--csv',
+        ], $this->config->paths()));
 
-            $pid = yield $process->start();
-            $this->logger->debug(sprintf('Started "%s"', $process->getCommand()));
+        $this->logger->debug(sprintf('Started "%s" (PID %s)', $process->getCommand(), $process->getPid()));
 
-            if (!$process->isRunning()) {
-                throw new WatcherDied(sprintf(
-                    'Could not start process: %s',
-                    $process->getCommand()
-                ));
-            }
+        if (!$process->isRunning()) {
+            throw new WatcherDied(sprintf(
+                'Could not start process: %s',
+                $process->getCommand()
+            ));
+        }
 
-            return $process;
-        });
+        return $process;
     }
 
-    /**
-     * @return Promise<void>
-     */
-    private function enqueueDirectory(string $path): Promise
+    private function enqueueDirectory(string $path): void
     {
-        return \Amp\call(function () use ($path) {
-            $files = scandir($path);
-            foreach ((array)$files as $file) {
-                if (false === $file || $file === '.' || $file === '..') {
-                    continue;
-                }
-
-                $filePath = Path::join($path, $file);
-                $isDir = is_dir($filePath);
-                $file = ModifiedFileBuilder::fromPath($filePath);
-
-                if ($isDir) {
-                    $file = $file->asFolder();
-                }
-
-                $this->directoryBuffer[] = $file->build();
-
-                if ($isDir) {
-                    yield $this->enqueueDirectory($filePath);
-                }
+        $files = scandir($path);
+        foreach ((array)$files as $file) {
+            if (false === $file || $file === '.' || $file === '..') {
+                continue;
             }
-        });
+
+            $filePath = Path::join($path, $file);
+            $isDir = is_dir($filePath);
+            $file = ModifiedFileBuilder::fromPath($filePath);
+
+            if ($isDir) {
+                $file = $file->asFolder();
+            }
+
+            $this->directoryBuffer[] = $file->build();
+
+            if ($isDir) {
+                $this->enqueueDirectory($filePath);
+            }
+        }
     }
 }

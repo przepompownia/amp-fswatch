@@ -4,12 +4,11 @@ Amp FS Watch
 ![CI](https://github.com/phpactor/amp-fswatch/workflows/CI/badge.svg)
 
 This is an [Amp](https://amphp.org/) library for asynchronously monitor paths
-on your file system changes using various stategues.
+on your file system changes using various stategies.
 
 It's been created to trigger code indexing in
 [Phpactor](https://github.com/phpactor/phpactor).
 
-- Promise based API.
 - Capable of automatically selecting a supported watcher for the current
   environment.
 - Provides realtime (e.g. ``inotify``) watchers in addition to polling ones.
@@ -39,9 +38,15 @@ Loop::run(function () use () {
         []
     );
 
-    $process = yield $watcher->watch([$path]);
+    $process = $watcher->watch([$path]);
 
-    while (null !== $file = yield $process->wait()) {
+    if (defined('SIGINT')) {
+        EventLoop::onSignal(SIGINT, function () use ($process): void {
+            $process->stop();
+        });
+    }
+
+    while (null !== $file = $process->wait()) {
         fwrite(STDOUT, sprintf('[%s] %s (%s)'."\n", date('Y-m-d H:i:s.u'), $file->path(), $file->type()));
     }
 });

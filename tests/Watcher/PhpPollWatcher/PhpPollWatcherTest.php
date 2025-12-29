@@ -2,7 +2,6 @@
 
 namespace Phpactor\AmpFsWatcher\Tests\Watcher\PhpPollWatcher;
 
-use Generator;
 use Phpactor\AmpFsWatch\Watcher;
 use Phpactor\AmpFsWatch\WatcherConfig;
 use Phpactor\AmpFsWatch\Watcher\PhpPollWatcher\PhpPollWatcher;
@@ -10,17 +9,17 @@ use Phpactor\AmpFsWatcher\Tests\Watcher\WatcherTestCase;
 
 class PhpPollWatcherTest extends WatcherTestCase
 {
-
-    public function testIsSupported(): Generator
+    public function testIsSupported(): void
     {
         $watcher = $this->createWatcher(new WatcherConfig([]));
-        self::assertTrue(yield $watcher->isSupported());
+        self::assertTrue($watcher->isSupported());
     }
 
-    public function testRemoval(): Generator
+    public function testRemoval(): void
     {
         $this->markTestSkipped('Not supported');
     }
+
     protected function createWatcher(WatcherConfig $config): Watcher
     {
         return new PhpPollWatcher(

@@ -2,10 +2,11 @@
 
 namespace Phpactor\AmpFsWatch\Watcher\Watchman;
 
-use Amp\ByteStream\LineReader;
+use Amp\Future;
+use Amp\Pipeline\ConcurrentIterator;
+use Amp\Pipeline\Pipeline;
 use Amp\Process\Process;
-use Amp\Process\StatusError;
-use Amp\Promise;
+use Amp\Process\ProcessException;
 use Phpactor\AmpFsWatch\Exception\WatcherDied;
 use Phpactor\AmpFsWatch\ModifiedFile;
 use Phpactor\AmpFsWatch\SystemDetector\CommandDetector;
@@ -16,9 +17,11 @@ use Phpactor\AmpFsWatch\WatcherProcess;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
+
 use function Amp\ByteStream\buffer;
-use function Amp\Promise\first;
-use function Amp\call;
+use function Amp\ByteStream\splitLines;
+use function Amp\Future\awaitAny;
+use function Amp\async;
 
 class WatchmanWatcher implements Watcher, WatcherProcess
 {
@@ -36,14 +39,14 @@ class WatchmanWatcher implements Watcher, WatcherProcess
     private WatcherConfig $config;
 
     /**
-     * @var LineReader[]
+     * @var ConcurrentIterator<string>[]
      */
     private array $lineReaders = [];
 
     /**
-     * @var array<int,Promise<string|null>>
+     * @var array<int,Future<array{int, ?string}>>
      */
-    private array $lineReaderPromises = [];
+    private array $lineReaderFutures = [];
 
     /**
      * @var array<ModifiedFile>
@@ -60,61 +63,59 @@ class WatchmanWatcher implements Watcher, WatcherProcess
         $this->config = $config;
     }
 
-    public function watch(): Promise
+    public function watch(): WatcherProcess
     {
-        return call(function () {
-            yield $this->watchPaths();
+        $this->watchPaths();
 
-            foreach ($this->config->paths() as $path) {
-                $subscriber = yield $this->subscribe($path);
-                $this->subscribers[] = $subscriber;
-                $this->lineReaders[] = new LineReader($subscriber->getStdout());
-            }
+        foreach ($this->config->paths() as $path) {
+            $subscriber = $this->subscribe($path);
+            $this->subscribers[] = $subscriber;
+            $this->lineReaders[] = Pipeline::fromIterable(splitLines($subscriber->getStdout()))->getIterator();
+        }
 
-            return $this;
-        });
+        return $this;
     }
 
-    public function wait(): Promise
+    public function wait(): ?ModifiedFile
     {
-        return call(function () {
-            while (null !== $file = array_shift($this->fileBuffer)) {
-                return $file;
+        while (null !== $file = array_shift($this->fileBuffer)) {
+            return $file;
+        }
+
+        while (null !== $line = $this->readLine()) {
+            $notification = json_decode($line, true);
+
+            if (false === $notification) {
+                throw new RuntimeException(sprintf(
+                    'Could not decode JSON from watchman: %s %s',
+                    $line,
+                    json_last_error_msg()
+                ));
             }
 
-            while (null !== $line = yield $this->readLine()) {
-                $notification = json_decode($line, true);
-
-                if (false === $notification) {
-                    throw new RuntimeException(sprintf(
-                        'Could not decode JSON from watchman: %s %s',
-                        $line,
-                        json_last_error_msg()
-                    ));
+            $files = array_map(function (array $file) use ($notification) {
+                $modifiedFile = ModifiedFileBuilder::fromPathSegments(
+                    $notification['root'],
+                    $file['name']
+                );
+                if ($file['type'] === 'd') {
+                    $modifiedFile = $modifiedFile->asFolder();
                 }
 
-                $files = array_map(function (array $file) use ($notification) {
-                    $modifiedFile = ModifiedFileBuilder::fromPathSegments(
-                        $notification['root'],
-                        $file['name']
-                    );
-                    if ($file['type'] === 'd') {
-                        $modifiedFile = $modifiedFile->asFolder();
-                    }
+                return $modifiedFile->build();
+            }, $notification['files'] ?? []);
 
-                    return $modifiedFile->build();
-                }, $notification['files'] ?? []);
+            if (empty($files)) {
+                continue;
+            }
 
-                if (empty($files)) {
-                    continue;
-                }
+            $file = array_shift($files);
+            $this->fileBuffer = array_merge($this->fileBuffer, $files);
 
-                $file = array_shift($files);
-                $this->fileBuffer = array_merge($this->fileBuffer, $files);
+            return $file;
+        };
 
-                return $file;
-            };
-        });
+        return null;
     }
 
     public function stop(): void
@@ -122,12 +123,12 @@ class WatchmanWatcher implements Watcher, WatcherProcess
         foreach ($this->subscribers as $subscriber) {
             try {
                 $subscriber->signal(SIGTERM);
-            } catch (StatusError) {
+            } catch (ProcessException) {
             }
         }
     }
 
-    public function isSupported(): Promise
+    public function isSupported(): bool
     {
         return $this->commandDetector->commandExists(self::WATCHMAN_CMD);
     }
@@ -138,130 +139,119 @@ class WatchmanWatcher implements Watcher, WatcherProcess
         return 'watchman';
     }
 
-    /**
-     * @return Promise<void>
-     */
-    private function watchPaths(): Promise
+    private function watchPaths(): void
     {
-        return call(function () {
-            foreach ($this->config->paths() as $path) {
-                $process = new Process([
-                    self::WATCHMAN_CMD,
-                    'watch',
-                    $path
-                ]);
-
-
-                $pid = yield $process->start();
-                $this->logger->debug(sprintf('Watchman: %s', $process->getCommand()));
-                $exit = yield $process->join();
-
-                if ($exit !== 0) {
-                    throw new RuntimeException(sprintf(
-                        'Watchman exited with code "%s": %s ',
-                        $exit,
-                        yield buffer($process->getStderr())
-                    ));
-                }
-            }
-        });
-    }
-
-    /**
-     * @return Promise<Process>
-     */
-    private function subscribe(string $path): Promise
-    {
-        return call(function () use ($path) {
-            $process = new Process([
+        foreach ($this->config->paths() as $path) {
+            $process = Process::start([
                 self::WATCHMAN_CMD,
-                '-j',
-                '-p',
-                '--no-pretty'
-            ]);
-            $this->logger->debug(sprintf('Watchman: %s', $process->getCommand()));
-
-            $pid = yield $process->start();
-            $payload = (string)json_encode([
-                'subscribe',
+                'watch',
                 $path,
-                'ampfs-watch',
-                [
-                    'expression' => [
-                        'allof',
-                        [
-                            'anyof',
-                            ['type', 'f'],
-                            ['type', 'd']
-                        ],
-                        [
-                            'since',
-                            time(),
-                            'ctime'
-                        ],
-                    ],
-                    'fields' => [
-                        'name','type',
-                    ],
-                ]
             ]);
-            $this->logger->debug(sprintf('Watchman: %s', $payload));
-            yield $process->getStdin()->write($payload);
 
-            if (!$process->isRunning()) {
-                throw new WatcherDied(sprintf(
-                    'Could not start process: %s',
-                    $process->getCommand()
+
+            $this->logger->debug(sprintf('Watchman: %s', $process->getCommand()));
+            $exit = $process->join();
+
+            if ($exit !== 0) {
+                throw new RuntimeException(sprintf(
+                    'Watchman exited with code "%s": %s ',
+                    $exit,
+                    buffer($process->getStderr())
                 ));
             }
-
-            return $process;
-        });
+        }
     }
 
-    /**
-     * @return Promise<string|null>
-     */
-    private function readLine(): Promise
+    private function subscribe(string $path): Process
     {
-        return call(function () {
-            foreach ($this->lineReaders as $index => $lineReader) {
-                if (array_key_exists((int)$index, $this->lineReaderPromises)) {
-                    continue;
-                }
+        $process = Process::start([
+            self::WATCHMAN_CMD,
+            '-j',
+            '-p',
+            '--no-pretty',
+        ]);
+        $this->logger->debug(sprintf('Watchman: %s', $process->getCommand()));
 
-                $this->lineReaderPromises[(int)$index] = call(function (int $index, LineReader $lineReader) {
-                    $line = yield $lineReader->readLine();
-                    return [$index, $line];
-                }, $index, $lineReader);
+        $payload = (string)json_encode([
+            'subscribe',
+            $path,
+            'ampfs-watch',
+            [
+                'expression' => [
+                    'allof',
+                    [
+                        'anyof',
+                        ['type', 'f'],
+                        ['type', 'd'],
+                    ],
+                    [
+                        'since',
+                        time(),
+                        'ctime',
+                    ],
+                ],
+                'fields' => [
+                    'name','type',
+                ],
+            ],
+        ]);
+        $this->logger->debug(sprintf('Watchman: %s', $payload));
+        $process->getStdin()->write($payload);
+
+        if (!$process->isRunning()) {
+            throw new WatcherDied(sprintf(
+                'Could not start process: %s',
+                $process->getCommand()
+            ));
+        }
+
+        return $process;
+    }
+
+    private function readLine(): ?string
+    {
+        foreach ($this->lineReaders as $index => $lineReader) {
+            if (array_key_exists((int)$index, $this->lineReaderFutures)) {
+                continue;
             }
 
-            [$index, $line] = yield first($this->lineReaderPromises);
-            unset($this->lineReaderPromises[(int)$index]);
-            $this->logger->debug(print_r($line, true));
+            $this->lineReaderFutures[(int)$index] = async(
+                function (int $index, ConcurrentIterator $lineReader): array {
+                    if (false === $lineReader->continue()) {
+                        return [$index, null];
+                    }
+                    return [$index, $lineReader->getValue()];
+                },
+                $index,
+                $lineReader,
+            );
+        }
 
-            if (null !== $line) {
-                return $line;
+        [$index, $line] = awaitAny($this->lineReaderFutures);
+        unset($this->lineReaderFutures[(int)$index]);
+        $this->logger->debug(print_r($line, true));
+
+        if (null !== $line) {
+            return $line;
+        }
+
+        foreach ($this->subscribers as $subscriber) {
+            if ($subscriber->isRunning()) {
+                continue;
             }
+            $exitCode = $subscriber->join();
 
-            foreach ($this->subscribers as $subscriber) {
-                if ($subscriber->isRunning()) {
-                    continue;
-                }
-                $exitCode = yield $subscriber->join();
-
-                // probably ran out of watchers, throw an error which can be
-                // handled downstream.
-                if ($exitCode === 1) {
-                    throw new WatcherDied(sprintf(
-                        'Watchman subscriber exited with status code "%s": %s',
-                        $exitCode,
-                        yield buffer($subscriber->getStderr())
-                    ));
-                }
+            // probably ran out of watchers, throw an error which can be
+            // handled downstream.
+            if ($exitCode === 1) {
+                throw new WatcherDied(sprintf(
+                    'Watchman subscriber exited with status code "%s": %s',
+                    $exitCode,
+                    buffer($subscriber->getStderr())
+                ));
             }
+        }
 
-            return null;
-        });
+        return null;
     }
 }
