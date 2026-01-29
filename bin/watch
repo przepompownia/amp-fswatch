@@ -10,6 +10,7 @@ use Phpactor\AmpFsWatch\Watcher\PatternMatching\PatternMatchingWatcher;
 use Phpactor\AmpFsWatch\Watcher\PhpPollWatcher\PhpPollWatcher;
 use Psr\Log\AbstractLogger;
 use Revolt\EventLoop;
+use function Amp\async;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -46,6 +47,6 @@ if (defined('SIGINT')) {
     });
 }
 
-while (null !== $file = $process->wait()) {
+while (null !== $file = async(fn () => $process->wait())->await()) {
     fwrite(STDOUT, sprintf('[%s] %s (%s)' . "\n", date('Y-m-d H:i:s.u'), $file->path(), $file->type()));
 }

@@ -10,11 +10,12 @@ use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
 use Phpactor\AmpFsWatcher\Tests\IntegrationTestCase;
 
+use function Amp\async;
 use function Amp\delay;
 
 abstract class WatcherTestCase extends IntegrationTestCase
 {
-    const DELAY_MILLI = 20;
+    const DELAY_MILLI = 30;
 
     protected function setUp(): void
     {
@@ -35,7 +36,7 @@ abstract class WatcherTestCase extends IntegrationTestCase
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            $process->wait()
+            async(fn () => $process->wait())->await(),
         );
 
         $process->stop();
@@ -53,7 +54,7 @@ abstract class WatcherTestCase extends IntegrationTestCase
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            $process->wait()
+            async(fn () => $process->wait())->await(),
         );
 
         $process->stop();
@@ -73,7 +74,7 @@ abstract class WatcherTestCase extends IntegrationTestCase
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            $process->wait()
+            async(fn () => $process->wait())->await(),
         );
 
         $process->stop();
@@ -92,7 +93,7 @@ abstract class WatcherTestCase extends IntegrationTestCase
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FOLDER
             ),
-            $process->wait()
+            async(fn () => $process->wait())->await(),
         );
 
         $process->stop();
@@ -115,7 +116,7 @@ abstract class WatcherTestCase extends IntegrationTestCase
                 $this->workspace()->path('foobar'),
                 ModifiedFile::TYPE_FILE
             ),
-            $process->wait()
+            async(fn () => $process->wait())->await(),
         );
 
         $process->stop();
@@ -140,7 +141,7 @@ abstract class WatcherTestCase extends IntegrationTestCase
 
         $files = [];
         for ($i = 0; $i < 2; $i++) {
-            $file = $process->wait();
+            $file = async(fn () => $process->wait())->await();
             $files[$file->path()] = $file;
         }
 
