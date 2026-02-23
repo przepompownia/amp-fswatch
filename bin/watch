@@ -17,11 +17,13 @@ require __DIR__ . '/../vendor/autoload.php';
 echo "This is a demo application\n";
 
 if (!isset($argv[1])) {
-    echo 'You must specify a path to watch';
+    echo 'You must specify at least one path to watch';
     exit(1);
 }
 
-$path = $argv[1];
+array_shift($argv);
+
+$paths = $argv;
 $logger = new class extends AbstractLogger {
     public function log($level, $message, array $context = []): void
     {
@@ -30,7 +32,7 @@ $logger = new class extends AbstractLogger {
 };
 
 
-$config = new WatcherConfig([$path]);
+$config = new WatcherConfig($paths);
 $watcher = new PatternMatchingWatcher(new FallbackWatcher([
     new InotifyWatcher($config, $logger),
     new FindWatcher($config, $logger),
