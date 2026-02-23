@@ -16,6 +16,7 @@ use Psr\Log\NullLogger;
 use RuntimeException;
 
 use function Amp\ByteStream\splitLines;
+use function Amp\Future\await;
 use function Amp\async;
 use function Amp\delay;
 
@@ -56,13 +57,14 @@ class FindWatcher implements Watcher, WatcherProcess
         $this->updateDateReference();
         $this->running = true;
 
-        async(function (): void {
-            delay(.01);
+        delay(.01);
 
+        async(function (): void {
             while ($this->running) {
-                foreach ($this->config->paths() as $path) {
-                    $this->search($path);
-                }
+                await(array_map(
+                    fn (string $path) => async(fn () => $this->search($path)),
+                    $this->config->paths(),
+                ));
                 $this->updateDateReference();
                 delay($this->config->pollInterval() / 1000);
             }
